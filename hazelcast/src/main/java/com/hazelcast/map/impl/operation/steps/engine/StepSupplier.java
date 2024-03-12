@@ -47,15 +47,14 @@ public class StepSupplier implements Supplier<Runnable>, Consumer<Step> {
 
     private final State state;
     private final OperationRunnerImpl operationRunner;
-
-    private volatile Runnable currentRunnable;
-    private volatile Step currentStep;
-    private volatile boolean firstStep = true;
-
     /**
      * Only here to disable check for testing purposes.
      */
     private final boolean checkCurrentThread;
+
+    private volatile Runnable currentRunnable;
+    private volatile Step currentStep;
+    private volatile boolean firstStep = true;
 
     public StepSupplier(MapOperation operation) {
         this(operation, true);
@@ -158,9 +157,7 @@ public class StepSupplier implements Supplier<Runnable>, Consumer<Step> {
         return new PartitionSpecificRunnable() {
             @Override
             public void run() {
-                if (checkCurrentThread) {
-                    assert isRunningOnPartitionThread();
-                }
+                assert !checkCurrentThread || isRunningOnPartitionThread();
                 runStepWithState(step, state);
             }
 
@@ -189,11 +186,12 @@ public class StepSupplier implements Supplier<Runnable>, Consumer<Step> {
         try {
             refreshSate(state);
 
+            int threadIndex = -1;
             // we check for error step here to handle potential
             // errors in `beforeOperation`/`afterOperation` calls.
             boolean errorStep = step == UtilSteps.HANDLE_ERROR;
             if (!errorStep) {
-                state.getRecordStore().beforeOperation();
+                threadIndex = state.getRecordStore().beforeOperation();
             }
             try {
                 if (runningOnPartitionThread && state.getThrowable() == null) {
@@ -213,7 +211,7 @@ public class StepSupplier implements Supplier<Runnable>, Consumer<Step> {
                 }
             } finally {
                 if (!errorStep) {
-                    state.getRecordStore().afterOperation();
+                    state.getRecordStore().afterOperation(threadIndex);
                 }
             }
         } catch (Throwable throwable) {
@@ -243,7 +241,6 @@ public class StepSupplier implements Supplier<Runnable>, Consumer<Step> {
      * operation and it can remove all current IMap state. In this
      * case later operations' state in the queue become stale.
      * By refreshing the {@link State} we are fixing this issue.
-     *
      */
     private void refreshSate(State state) {
         MapOperation operation = state.getOperation();
